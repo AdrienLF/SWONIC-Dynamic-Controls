@@ -1360,6 +1360,9 @@ const float NO_PLAYED_VELOCITY = -1.0;
 //------------------------------------------------------------------------------
 void setControlValueA(int controlIndex, int value)  { setHeapByte(controlIndex, value); }
 int  getControlValueA(int controlIndex)             { return getHeapByte(controlIndex); }
+void setControlValueB(int controlIndex, int value)  { setHeapByte(controlIndex + 16, value); }
+int  getControlValueB(int controlIndex)             { return getHeapByte(controlIndex + 16); }
+
 
 //------------------------------------------------------------------------------
 //  Control Coordinates
@@ -1387,6 +1390,10 @@ int  getControlTouchField(int controlIndex)                 { return getHeapInt(
 //------------------------------------------------------------------------------
 void setControlCCA(int controlIndex, int value)     { setHeapByte(controlIndex + 225, value); }
 int  getControlCCA(int controlIndex)                { return getHeapByte(controlIndex + 225); }
+
+void setControlCCB(int controlIndex, int value)     { setHeapByte(controlIndex + 208, value); }
+int  getControlCCB(int controlIndex)                { return getHeapByte(controlIndex + 208); }
+
 
 void setControlType(int controlIndex, int value)    { setHeapByte(controlIndex + 250, value); }
 int  getControlType(int controlIndex)               { return getHeapByte(controlIndex + 250); }
@@ -1526,20 +1533,24 @@ void doTouch(int touchIndex, float x, float y, float z, float vz)
 
 void doTouchEnd(int controlIndex, int touchFlag)
 {
-    int touchField = getControlTouchField(controlIndex);                // fetch bitfield with registered touches for ctrl
+    int touchField = getControlTouchField(controlIndex);  // fetch bitfield with registered touches
 
-    if (touchField & touchFlag)                                         // if touch was registered with current ctrl, ...
+    if (touchField & touchFlag)  // if this touch was registered with the control...
     {
-        touchField = touchField & ~touchFlag;                           // unregister touch from ctrl
+        // Unregister the touch
+        touchField = touchField & ~touchFlag;   
         setControlTouchField(controlIndex, touchField);
 
-        if (! touchField)                                               // if no touches left registered, ...
+        // If no touches remain...
+        if (!touchField)
         {
-            if (getControlMode(controlIndex) == B_MOMENTARY)            // ...reset CCs for momentary controls
+            if (getControlMode(controlIndex) == B_MOMENTARY)
             {
                 if (getControlType(controlIndex) == C_NOTE)
                 {
-                    sendMIDI(0x80 | globalMidiChannel, getMidiNote(controlIndex), 0);
+                    // Use the stored transposed note (from ControlValueB) for Note Off.
+                    int storedNote = getControlValueB(controlIndex);
+                    sendMIDI(0x80 | globalMidiChannel, storedNote, 0);
                     setControlValueA(controlIndex, 0);
                 }
                 else
@@ -1552,43 +1563,72 @@ void doTouchEnd(int controlIndex, int touchFlag)
     }
 }
 
+
 //------------------------------------------------------------------------------
 //  Control MIDI Functions
 //------------------------------------------------------------------------------
 
+
 void doButton(int controlIndex)
 {
-    int value = (getControlValueA(controlIndex) == 0) ? 127 : 0;
+    // Look at the CC number for this button
+    int specialCC = getControlCCA(controlIndex);
+
+    // For example, pick 126 for Octave Up, 127 for Octave Down
+    if (specialCC == 126)
+    {
+        octaveOffset++;  // +12 semitones
+        return;
+    }
+    else if (specialCC == 127)
+    {
+        octaveOffset--;  // -12 semitones
+        return;
+    }
+
+    // If it's not a special octave button, do normal button stuff:
+    int value = (getControlValueA(controlIndex) == 0) 
+                  ? getControlCCB(controlIndex) 
+                  : 0;
+
     sendCC(globalMidiChannel, getControlCCA(controlIndex), value);
     setControlValueA(controlIndex, value);
 }
 
 void doNote(int controlIndex, float playedVelocity, bool isFirstTouch)
 {
-    // Use CC A value to track whether note is on
-    bool isNoteOn = getControlValueA(controlIndex);
-
+    // Check if a note is currently active.
+    bool isNoteOn = (getControlValueA(controlIndex) > 0);
+    
+    // Calculate the transposed (offset) note.
+    int baseNote = getMidiNote(controlIndex);
+    int offsetNote = baseNote + (octaveOffset * 12);
+    
     if (isNoteOn)
     {
-        // Send Note Off
-        sendMIDI(0x80 | globalMidiChannel, getMidiNote(controlIndex), 0);
+        // Retrieve the note that was actually turned on from ControlValueB.
+        int storedNote = getControlValueB(controlIndex);
+        sendMIDI(0x80 | globalMidiChannel, storedNote, 0);
         setControlValueA(controlIndex, 0);
     }
 
-    if (isNoteOn != isFirstTouch)           // logical xor with normalised bool values
+    // If the touch event indicates a new note should be played (toggle logic)
+    if (isNoteOn != isFirstTouch)  // logical XOR
     {
-        // Send Note On
         int velocity;
-
         if (fixedVelocity || (playedVelocity < 0.0))
-            velocity = velocityValue;                                   // use fixed velocity value
+            velocity = velocityValue;  // use fixed velocity value
         else
-            velocity = clamp(1, 127, int(playedVelocity * 127.0));      // use velocity as played
+            velocity = clamp(1, 127, int(playedVelocity * 127.0));
 
-        sendMIDI(0x90 | globalMidiChannel, getMidiNote(controlIndex), velocity);
+        // Store the actual transposed note for later use in Note Off.
+        setControlValueB(controlIndex, offsetNote);
+        sendMIDI(0x90 | globalMidiChannel, offsetNote, velocity);
         setControlValueA(controlIndex, velocity);
     }
 }
+
+
 
 void doFader(int controlIndex, float x, float y)
 {
@@ -1643,10 +1683,14 @@ int activeShade, inactiveShade;
 //  Initialisation
 //==============================================================================
 
+int octaveOffset;
+
+
 void initialise()
 {
 //  Disable duplicate note filter
     useMPEDuplicateFilter(false);
+    octaveOffset = 0;
 
 //  Turn gamma correction on
     setLocalConfig(33, 1);

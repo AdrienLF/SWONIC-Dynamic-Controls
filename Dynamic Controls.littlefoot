@@ -1533,7 +1533,7 @@
 //
 //  MIT License
 //
-//  Copyright (c) 2019-2022 Andreas Swoboda, Anthony Alfimov
+//  Copyright (c) 2019-2020 Andreas Swoboda, Anthony Alfimov
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy
 //  of this software and associated documentation files (the "Software"), to deal
@@ -1817,7 +1817,9 @@ void doTouchEnd(int controlIndex, int touchFlag)
             {
                 if (getControlType(controlIndex) == C_NOTE)
                 {
-                    sendMIDI(0x80 | getMidiChannel(controlIndex), getMidiNote(controlIndex), 0);
+                    int oldNote = getControlValueB(controlIndex);
+
+                    sendMIDI(0x80 | getMidiChannel(controlIndex), oldNote, 0);
                     setControlValueA(controlIndex, 0);
                 }
                 else
@@ -1843,39 +1845,77 @@ void doTouchEnd(int controlIndex, int touchFlag)
 //  Control MIDI Functions
 //------------------------------------------------------------------------------
 
+
+
+
 void doButton(int controlIndex)
 {
-    int value = (getControlValueA(controlIndex) == 0) ? getControlCCB(controlIndex) : 0;
+    // Look at the CC number for this button
+    int specialCC = getControlCCA(controlIndex);
+
+    // For example, pick 126 for Octave Up, 127 for Octave Down
+    if (specialCC == 126)
+    {
+        octaveOffset++;  // +12 semitones
+        return;
+    }
+    else if (specialCC == 127)
+    {
+        octaveOffset--;  // -12 semitones
+        return;
+    }
+
+    // If it's not a special octave button, do normal button stuff:
+    int value = (getControlValueA(controlIndex) == 0) 
+                  ? getControlCCB(controlIndex) 
+                  : 0;
+
     sendCC(getMidiChannel(controlIndex), getControlCCA(controlIndex), value);
     setControlValueA(controlIndex, value);
 }
 
 void doNote(int controlIndex, float playedVelocity, bool isFirstTouch)
 {
-    // Use CC A value to track whether note is on
-    bool isNoteOn = getControlValueA(controlIndex);
+    // "isNoteOn" is tracked by whether ControlValueA > 0
+    bool isNoteOn = getControlValueA(controlIndex) > 0;
+
+    // Calculate the actual note we intend to play
+    int baseNote = getMidiNote(controlIndex);
+    int offsetNote = baseNote + (octaveOffset * 12);
 
     if (isNoteOn)
     {
-        // Send Note Off
-        sendMIDI(0x80 | getMidiChannel(controlIndex), getMidiNote(controlIndex), 0);
+        // If it’s currently on, we first send Note Off to
+        // whatever pitch we last used
+        int oldNote = getControlValueB(controlIndex); // stored note
+        sendMIDI(0x80 | getMidiChannel(controlIndex), oldNote, 0);
+
+        // Clear the "note is on" flag
         setControlValueA(controlIndex, 0);
     }
 
-    if (isNoteOn != isFirstTouch)           // logical xor with normalised bool values
+    // We do a simple toggle logic: if isNoteOn != isFirstTouch, send Note On
+    if (isNoteOn != isFirstTouch) // XOR
     {
-        // Send Note On
+        // Determine velocity
         int velocity;
-
         if (fixedVelocity || (playedVelocity < 0.0))
-            velocity = getControlCCB(controlIndex);                     // use fixed velocity value
+            velocity = getControlCCB(controlIndex);
         else
-            velocity = clamp(1, 127, int(playedVelocity * 127.0));      // use velocity as played
+            velocity = clamp(1, 127, int(playedVelocity * 127.0));
 
-        sendMIDI(0x90 | getMidiChannel(controlIndex), getMidiNote(controlIndex), velocity);
+        // Remember which pitch we are about to turn on
+        setControlValueB(controlIndex, offsetNote);
+
+        // Send Note On at the offset pitch
+        sendMIDI(0x90 | getMidiChannel(controlIndex), offsetNote, velocity);
+
+        // Mark that a note is on, using velocity as the "A" value
         setControlValueA(controlIndex, velocity);
     }
 }
+
+
 
 void doFader(int controlIndex, float x, float y)
 {
@@ -1950,11 +1990,16 @@ int activeShade, inactiveShade;
 //  Initialisation
 //==============================================================================
 
+int octaveOffset;
+
+
 void initialise()
 {
 //  Disable duplicate note filter
     useMPEDuplicateFilter(false);
 
+    
+  
 //  Turn gamma correction on
     setLocalConfig(33, 1);
 
