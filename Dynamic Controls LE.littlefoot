@@ -1358,10 +1358,19 @@ const float NO_PLAYED_VELOCITY = -1.0;
 //------------------------------------------------------------------------------
 //  Control Values
 //------------------------------------------------------------------------------
+// Increase the heap size to accommodate 25 extra bytes (one per control)
+#heapsize: 425
+
+// Existing functions for control value A remain unchanged:
 void setControlValueA(int controlIndex, int value)  { setHeapByte(controlIndex, value); }
 int  getControlValueA(int controlIndex)             { return getHeapByte(controlIndex); }
-void setControlValueB(int controlIndex, int value)  { setHeapByte(controlIndex + 16, value); }
-int  getControlValueB(int controlIndex)             { return getHeapByte(controlIndex + 16); }
+
+// --- Modified functions for note (control value B) ---
+// Previously, note values were stored at controlIndex + 16, which causes overlap.
+// We now store them starting at offset 400.
+void setControlValueB(int controlIndex, int value)  { setHeapByte(controlIndex + 400, value); }
+int  getControlValueB(int controlIndex)             { return getHeapByte(controlIndex + 400); }
+
 
 
 //------------------------------------------------------------------------------
