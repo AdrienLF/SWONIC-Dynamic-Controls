@@ -1366,12 +1366,10 @@ void setControlValueA(int controlIndex, int value)  { setHeapByte(controlIndex, 
 int  getControlValueA(int controlIndex)             { return getHeapByte(controlIndex); }
 
 // --- Modified functions for note (control value B) ---
-// Previously, note values were stored at controlIndex + 16, which causes overlap.
+// Previously, note values were stored at controlIndex + 16 (which overlaps when there are 10+ controls).
 // We now store them starting at offset 400.
 void setControlValueB(int controlIndex, int value)  { setHeapByte(controlIndex + 400, value); }
 int  getControlValueB(int controlIndex)             { return getHeapByte(controlIndex + 400); }
-
-
 
 //------------------------------------------------------------------------------
 //  Control Coordinates
@@ -1542,11 +1540,11 @@ void doTouch(int touchIndex, float x, float y, float z, float vz)
 
 void doTouchEnd(int controlIndex, int touchFlag)
 {
-    int touchField = getControlTouchField(controlIndex);  // fetch bitfield with registered touches
+    int touchField = getControlTouchField(controlIndex);
 
-    if (touchField & touchFlag)  // if this touch was registered with the control...
+    if (touchField & touchFlag)  // if this touch was registered...
     {
-        // Unregister the touch
+        // Unregister the touch.
         touchField = touchField & ~touchFlag;   
         setControlTouchField(controlIndex, touchField);
 
@@ -1557,9 +1555,11 @@ void doTouchEnd(int controlIndex, int touchFlag)
             {
                 if (getControlType(controlIndex) == C_NOTE)
                 {
-                    // Use the stored transposed note (from ControlValueB) for Note Off.
                     int storedNote = getControlValueB(controlIndex);
-                    sendMIDI(0x80 | globalMidiChannel, storedNote, 0);
+                    // Send Note Off for each tone in the major triad.
+                    sendMIDI(0x80 | globalMidiChannel, storedNote + 0, 0);
+                    sendMIDI(0x80 | globalMidiChannel, storedNote + 4, 0);
+                    sendMIDI(0x80 | globalMidiChannel, storedNote + 7, 0);
                     setControlValueA(controlIndex, 0);
                 }
                 else
@@ -1571,6 +1571,7 @@ void doTouchEnd(int controlIndex, int touchFlag)
         }
     }
 }
+
 
 
 //------------------------------------------------------------------------------
@@ -1604,39 +1605,34 @@ void doButton(int controlIndex)
     setControlValueA(controlIndex, value);
 }
 
+// This doNote() function always sends a major triad:
+// (root, major third, and perfect fifth)
+// doNote() now sends a major triad on touch start only.
 void doNote(int controlIndex, float playedVelocity, bool isFirstTouch)
 {
-    // Check if a note is currently active.
-    bool isNoteOn = (getControlValueA(controlIndex) > 0);
-    
-    // Calculate the transposed (offset) note.
-    int baseNote = getMidiNote(controlIndex);
-    int offsetNote = baseNote + (octaveOffset * 12);
-    
-    if (isNoteOn)
+    if (isFirstTouch)
     {
-        // Retrieve the note that was actually turned on from ControlValueB.
-        int storedNote = getControlValueB(controlIndex);
-        sendMIDI(0x80 | globalMidiChannel, storedNote, 0);
-        setControlValueA(controlIndex, 0);
-    }
-
-    // If the touch event indicates a new note should be played (toggle logic)
-    if (isNoteOn != isFirstTouch)  // logical XOR
-    {
+        int baseNote = getMidiNote(controlIndex);
+        int offsetNote = baseNote + (octaveOffset * 12);
         int velocity;
         if (fixedVelocity || (playedVelocity < 0.0))
-            velocity = velocityValue;  // use fixed velocity value
+            velocity = velocityValue;
         else
             velocity = clamp(1, 127, int(playedVelocity * 127.0));
 
-        // Store the actual transposed note for later use in Note Off.
+        // Store the base note (for use in note-off)
         setControlValueB(controlIndex, offsetNote);
-        sendMIDI(0x90 | globalMidiChannel, offsetNote, velocity);
+
+        // Send Note On for each tone in the major triad:
+        sendMIDI(0x90 | globalMidiChannel, offsetNote + 0, velocity);
+        sendMIDI(0x90 | globalMidiChannel, offsetNote + 4, velocity);
+        sendMIDI(0x90 | globalMidiChannel, offsetNote + 7, velocity);
+
+        // Mark the control as active.
         setControlValueA(controlIndex, velocity);
     }
+    // Do nothing on subsequent events.
 }
-
 
 
 void doFader(int controlIndex, float x, float y)
